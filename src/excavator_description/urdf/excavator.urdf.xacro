@@ -1,0 +1,461 @@
+<?xml version="1.0"?>
+<!--
+  Tracked excavator built from primitive shapes (no meshes).
+  Units: metres, kilograms, radians.
+
+  Kinematic chain:
+    base_footprint (ground, root)
+    └─ base_link (undercarriage)
+         ├─ left_track / right_track        (fixed)
+         └─ swing_joint   → upper_structure (revolute, Z)
+              └─ boom_joint   → boom        (revolute, pitch)
+                   └─ arm_joint    → arm    (revolute, pitch)
+                        └─ bucket_joint → bucket (revolute, pitch)
+
+  Pitch joints use axis "0 -1 0" so a positive angle raises the link.
+
+  Visuals are detailed; collision and inertia use one simple box per link.
+
+  Hydraulic cylinders are visual only: each is a <name>_barrel link hung
+  from its base link and a <name>_rod link hung from its tip link, both by
+  floating joints. robot_state_publisher and the joint GUIs ignore floating
+  joints; the excavator_hydraulics node publishes their TF so the barrel and
+  rod always point at each other's mounting pin.
+  Barrel and rod lengths must each be <= the shortest pin-to-pin distance
+  over the joint range, and together >= the longest.
+-->
+<robot name="excavator" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ===================== Parameters ===================== -->
+  <xacro:property name="half_pi" value="${pi/2}"/>
+
+  <!-- undercarriage -->
+  <xacro:property name="frame_size_x" value="2.4"/>
+  <xacro:property name="frame_size_y" value="1.4"/>
+  <xacro:property name="frame_size_z" value="0.5"/>
+  <xacro:property name="frame_z" value="0.65"/>
+  <xacro:property name="frame_mass" value="6000"/>
+
+  <xacro:property name="track_length" value="3.6"/>  <!-- straight section -->
+  <xacro:property name="track_width" value="0.6"/>
+  <xacro:property name="track_height" value="0.9"/>
+  <xacro:property name="track_offset_y" value="1.05"/>
+  <xacro:property name="track_mass" value="2000"/>
+  <xacro:property name="belt_thickness" value="0.08"/>
+
+  <xacro:property name="swing_z" value="1.0"/>
+
+  <!-- upper structure (collision / inertia box) -->
+  <xacro:property name="house_size_x" value="3.0"/>
+  <xacro:property name="house_size_y" value="2.6"/>
+  <xacro:property name="house_size_z" value="1.0"/>
+  <xacro:property name="house_offset_x" value="-0.5"/>
+  <xacro:property name="house_mass" value="7000"/>
+
+  <!-- digging linkage -->
+  <xacro:property name="boom_length" value="5.5"/>
+  <xacro:property name="boom_width" value="0.5"/>
+  <xacro:property name="boom_height" value="0.6"/>
+  <xacro:property name="boom_knee_x" value="2.6"/>  <!-- bend of the boom -->
+  <xacro:property name="boom_knee_z" value="0.8"/>
+  <xacro:property name="boom_mass" value="1800"/>
+
+  <xacro:property name="arm_length" value="3.0"/>
+  <xacro:property name="arm_width" value="0.4"/>
+  <xacro:property name="arm_height" value="0.45"/>
+  <xacro:property name="arm_mass" value="900"/>
+
+  <xacro:property name="bucket_length" value="1.1"/>
+  <xacro:property name="bucket_width" value="1.1"/>
+  <xacro:property name="bucket_depth" value="0.6"/>
+  <xacro:property name="bucket_plate" value="0.05"/>
+  <xacro:property name="bucket_mass" value="700"/>
+
+  <!-- hydraulic cylinders: mounting pins (link frame, XZ) and lengths -->
+  <xacro:property name="barrel_radius" value="0.11"/>
+  <xacro:property name="rod_radius" value="0.055"/>
+  <xacro:property name="boom_cyl_base" value="${[1.45, 0.55]}"/>    <!-- on upper_structure -->
+  <xacro:property name="boom_cyl_tip" value="${[2.3, 0.35]}"/>      <!-- on boom -->
+  <xacro:property name="boom_cyl_y" value="0.36"/>                  <!-- ± from boom centre -->
+  <xacro:property name="boom_cyl_length" value="1.7"/>              <!-- pins 1.78 .. 2.88 m -->
+  <xacro:property name="arm_cyl_base" value="${[2.3, 1.25]}"/>      <!-- on boom -->
+  <xacro:property name="arm_cyl_tip" value="${[-0.45, 0.76]}"/>     <!-- on arm -->
+  <xacro:property name="arm_cyl_length" value="2.55"/>              <!-- pins 2.63 .. 4.32 m -->
+  <xacro:property name="bucket_cyl_base" value="${[-0.2, 0.55]}"/>  <!-- on arm -->
+  <xacro:property name="bucket_cyl_tip" value="${[0.05, 0.42]}"/>   <!-- on bucket -->
+  <xacro:property name="bucket_cyl_length" value="2.8"/>            <!-- pins 2.89 .. 3.67 m -->
+
+  <!-- ===================== Materials ===================== -->
+  <material name="yellow"><color rgba="0.96 0.71 0.05 1.0"/></material>
+  <material name="dark_grey"><color rgba="0.16 0.16 0.17 1.0"/></material>
+  <material name="grey"><color rgba="0.38 0.38 0.40 1.0"/></material>
+  <material name="rubber"><color rgba="0.07 0.07 0.07 1.0"/></material>
+  <material name="steel"><color rgba="0.62 0.62 0.65 1.0"/></material>
+  <material name="chrome"><color rgba="0.88 0.88 0.92 1.0"/></material>
+  <material name="glass"><color rgba="0.13 0.20 0.28 1.0"/></material>
+  <material name="orange"><color rgba="1.00 0.45 0.05 1.0"/></material>
+
+  <!-- ===================== Macros ===================== -->
+
+  <!-- Solid box inertia, centred at xyz. -->
+  <xacro:macro name="box_inertial" params="mass x y z xyz:='0 0 0'">
+    <inertial>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <mass value="${mass}"/>
+      <inertia ixx="${mass/12*(y*y + z*z)}" ixy="0" ixz="0"
+               iyy="${mass/12*(x*x + z*z)}" iyz="0"
+               izz="${mass/12*(x*x + y*y)}"/>
+    </inertial>
+  </xacro:macro>
+
+  <xacro:macro name="box_collision" params="x y z xyz:='0 0 0'">
+    <collision>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <geometry><box size="${x} ${y} ${z}"/></geometry>
+    </collision>
+  </xacro:macro>
+
+  <xacro:macro name="box_visual" params="x y z material xyz:='0 0 0'">
+    <visual>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <geometry><box size="${x} ${y} ${z}"/></geometry>
+      <material name="${material}"/>
+    </visual>
+  </xacro:macro>
+
+  <!-- Vertical cylinder (along Z). -->
+  <xacro:macro name="post_visual" params="radius length material xyz">
+    <visual>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <geometry><cylinder radius="${radius}" length="${length}"/></geometry>
+      <material name="${material}"/>
+    </visual>
+  </xacro:macro>
+
+  <!-- Cylinder lying along Y (pins, wheels, bosses). -->
+  <xacro:macro name="pin_visual" params="radius length material xyz:='0 0 0'">
+    <visual>
+      <origin xyz="${xyz}" rpy="${half_pi} 0 0"/>
+      <geometry><cylinder radius="${radius}" length="${length}"/></geometry>
+      <material name="${material}"/>
+    </visual>
+  </xacro:macro>
+
+  <!-- Box spanning two points in the XZ plane (w = Y size, h = thickness). -->
+  <xacro:macro name="beam" params="x1 z1 x2 z2 w h material y:=0">
+    <visual>
+      <origin xyz="${(x1 + x2)/2} ${y} ${(z1 + z2)/2}" rpy="0 ${-atan2(z2 - z1, x2 - x1)} 0"/>
+      <geometry><box size="${sqrt((x2 - x1)**2 + (z2 - z1)**2)} ${w} ${h}"/></geometry>
+      <material name="${material}"/>
+    </visual>
+  </xacro:macro>
+
+  <!-- Cylinder spanning two points in the XZ plane. -->
+  <xacro:macro name="rod" params="x1 z1 x2 z2 radius material y:=0">
+    <visual>
+      <origin xyz="${(x1 + x2)/2} ${y} ${(z1 + z2)/2}" rpy="0 ${atan2(x2 - x1, z2 - z1)} 0"/>
+      <geometry><cylinder radius="${radius}" length="${sqrt((x2 - x1)**2 + (z2 - z1)**2)}"/></geometry>
+      <material name="${material}"/>
+    </visual>
+  </xacro:macro>
+
+  <!-- Hydraulic cylinder between a pin on `base` and a pin on `tip` (pins are [x, z]).
+       Each link's +X points at the opposite pin; TF comes from excavator_hydraulics. -->
+  <xacro:macro name="hydraulic_cylinder" params="name base base_pin tip tip_pin length base_y:=0 tip_y:=0">
+    <link name="${name}_barrel">
+      <visual>
+        <origin xyz="${length/2} 0 0" rpy="0 ${half_pi} 0"/>
+        <geometry><cylinder radius="${barrel_radius}" length="${length}"/></geometry>
+        <material name="dark_grey"/>
+      </visual>
+      <visual>
+        <origin xyz="${length - 0.04} 0 0" rpy="0 ${half_pi} 0"/>
+        <geometry><cylinder radius="${barrel_radius + 0.015}" length="0.08"/></geometry>
+        <material name="steel"/>
+      </visual>
+      <xacro:pin_visual radius="${barrel_radius}" length="0.2" material="steel"/>
+    </link>
+    <joint name="${name}_barrel_joint" type="floating">
+      <parent link="${base}"/>
+      <child link="${name}_barrel"/>
+      <origin xyz="${base_pin[0]} ${base_y} ${base_pin[1]}" rpy="0 0 0"/>
+    </joint>
+
+    <link name="${name}_rod">
+      <visual>
+        <origin xyz="${length/2} 0 0" rpy="0 ${half_pi} 0"/>
+        <geometry><cylinder radius="${rod_radius}" length="${length}"/></geometry>
+        <material name="chrome"/>
+      </visual>
+      <xacro:pin_visual radius="0.08" length="0.18" material="steel"/>
+    </link>
+    <joint name="${name}_rod_joint" type="floating">
+      <parent link="${tip}"/>
+      <child link="${name}_rod"/>
+      <origin xyz="${tip_pin[0]} ${tip_y} ${tip_pin[1]}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- n boxes in a row along X, starting at x0 with spacing dx. -->
+  <xacro:macro name="box_row" params="n x0 dx sx sy sz z material">
+    <xacro:if value="${n > 0}">
+      <xacro:box_visual x="${sx}" y="${sy}" z="${sz}" material="${material}" xyz="${x0} 0 ${z}"/>
+      <xacro:box_row n="${n - 1}" x0="${x0 + dx}" dx="${dx}" sx="${sx}" sy="${sy}" sz="${sz}"
+                     z="${z}" material="${material}"/>
+    </xacro:if>
+  </xacro:macro>
+
+  <!-- n Y-axis cylinders in a row along X (track rollers). -->
+  <xacro:macro name="roller_row" params="n x0 dx radius length z">
+    <xacro:if value="${n > 0}">
+      <xacro:pin_visual radius="${radius}" length="${length}" material="steel" xyz="${x0} 0 ${z}"/>
+      <xacro:roller_row n="${n - 1}" x0="${x0 + dx}" dx="${dx}" radius="${radius}"
+                        length="${length}" z="${z}"/>
+    </xacro:if>
+  </xacro:macro>
+
+  <!-- Track: belt with shoes, sprocket, idler and rollers. side = left | right, reflect = 1 | -1 -->
+  <xacro:macro name="track" params="side reflect">
+    <xacro:property name="r" value="${track_height/2}"/>
+    <link name="${side}_track">
+      <!-- belt -->
+      <xacro:box_visual x="${track_length}" y="${track_width}" z="${belt_thickness}" material="rubber"
+                        xyz="0 0 ${r - belt_thickness/2}"/>
+      <xacro:box_visual x="${track_length}" y="${track_width}" z="${belt_thickness}" material="rubber"
+                        xyz="0 0 ${-r + belt_thickness/2}"/>
+      <xacro:pin_visual radius="${r}" length="${track_width}" material="rubber" xyz="${track_length/2} 0 0"/>
+      <xacro:pin_visual radius="${r}" length="${track_width}" material="rubber" xyz="${-track_length/2} 0 0"/>
+      <!-- track shoes (grousers) on top run -->
+      <xacro:box_row n="18" x0="${-track_length/2 + 0.1}" dx="0.2" sx="0.07" sy="${track_width}" sz="0.04"
+                     z="${r + 0.02}" material="rubber"/>
+      <!-- idler (front) and drive sprocket (rear) -->
+      <xacro:pin_visual radius="${r - 0.08}" length="${track_width + 0.04}" material="grey"
+                        xyz="${track_length/2} 0 0"/>
+      <xacro:pin_visual radius="${r - 0.06}" length="${track_width + 0.04}" material="dark_grey"
+                        xyz="${-track_length/2} 0 0"/>
+      <xacro:pin_visual radius="0.14" length="${track_width + 0.08}" material="steel"
+                        xyz="${track_length/2} 0 0"/>
+      <xacro:pin_visual radius="0.18" length="${track_width + 0.08}" material="steel"
+                        xyz="${-track_length/2} 0 0"/>
+      <!-- track frame -->
+      <xacro:box_visual x="${track_length - 0.1}" y="${track_width - 0.16}" z="0.55" material="dark_grey"/>
+      <!-- bottom and carrier rollers -->
+      <xacro:roller_row n="6" x0="-1.25" dx="0.5" radius="0.09" length="${track_width - 0.1}"
+                        z="${-r + belt_thickness + 0.09}"/>
+      <xacro:roller_row n="2" x0="-0.7" dx="1.4" radius="0.06" length="0.3"
+                        z="${r - belt_thickness - 0.06}"/>
+
+      <xacro:box_collision x="${track_length + track_height}" y="${track_width}" z="${track_height}"/>
+      <xacro:box_inertial mass="${track_mass}"
+                          x="${track_length + track_height}" y="${track_width}" z="${track_height}"/>
+    </link>
+
+    <joint name="${side}_track_joint" type="fixed">
+      <parent link="base_link"/>
+      <child link="${side}_track"/>
+      <origin xyz="0 ${reflect*track_offset_y} ${track_height/2}" rpy="0 0 0"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Revolute pitch joint; positive angle raises the child link. -->
+  <xacro:macro name="pitch_joint" params="name parent child xyz lower upper effort velocity">
+    <joint name="${name}" type="revolute">
+      <parent link="${parent}"/>
+      <child link="${child}"/>
+      <origin xyz="${xyz}" rpy="0 0 0"/>
+      <axis xyz="0 -1 0"/>
+      <limit lower="${lower}" upper="${upper}" effort="${effort}" velocity="${velocity}"/>
+    </joint>
+  </xacro:macro>
+
+  <!-- Bucket tooth at lateral position y. -->
+  <xacro:macro name="tooth" params="y">
+    <xacro:box_visual x="0.2" y="0.1" z="0.06" material="steel"
+                      xyz="${bucket_length + 0.12} ${y} ${-bucket_depth - 0.02}"/>
+  </xacro:macro>
+
+  <!-- ===================== Undercarriage ===================== -->
+  <!-- Inertia-free root link (KDL does not support inertia on the root). -->
+  <link name="base_footprint"/>
+
+  <joint name="base_footprint_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+
+  <link name="base_link">
+    <!-- centre body and cross members to the tracks -->
+    <xacro:box_visual x="${frame_size_x}" y="${frame_size_y}" z="${frame_size_z}"
+                      material="dark_grey" xyz="0 0 ${frame_z}"/>
+    <xacro:box_visual x="1.2" y="${2*track_offset_y}" z="0.3" material="dark_grey" xyz="0 0 0.6"/>
+    <!-- slewing ring -->
+    <xacro:post_visual radius="0.85" length="0.1" material="grey" xyz="0 0 0.95"/>
+
+    <xacro:box_collision x="${frame_size_x}" y="${frame_size_y}" z="${frame_size_z}" xyz="0 0 ${frame_z}"/>
+    <xacro:box_inertial mass="${frame_mass}" x="${frame_size_x}" y="${frame_size_y}" z="${frame_size_z}"
+                        xyz="0 0 ${frame_z}"/>
+  </link>
+
+  <xacro:track side="left" reflect="1"/>
+  <xacro:track side="right" reflect="-1"/>
+
+  <!-- ===================== Upper structure (house) ===================== -->
+  <link name="upper_structure">
+    <!-- deck skirt and body -->
+    <xacro:box_visual x="${house_size_x}" y="${house_size_y}" z="0.2" material="dark_grey"
+                      xyz="${house_offset_x} 0 0.1"/>
+    <xacro:box_visual x="${house_size_x}" y="${house_size_y}" z="0.7" material="yellow"
+                      xyz="${house_offset_x} 0 0.55"/>
+    <!-- engine hood with vent -->
+    <xacro:box_visual x="1.6" y="2.4" z="0.3" material="yellow" xyz="-1.2 0 1.05"/>
+    <xacro:box_visual x="0.7" y="1.2" z="0.02" material="dark_grey" xyz="-1.2 -0.3 1.21"/>
+    <!-- counterweight, rounded at the rear corners -->
+    <xacro:box_visual x="0.5" y="2.0" z="0.9" material="yellow" xyz="-2.25 0 0.55"/>
+    <xacro:post_visual radius="0.3" length="0.9" material="yellow" xyz="-2.2 1.0 0.55"/>
+    <xacro:post_visual radius="0.3" length="0.9" material="yellow" xyz="-2.2 -1.0 0.55"/>
+    <xacro:box_visual x="0.52" y="2.62" z="0.08" material="dark_grey" xyz="-2.24 0 0.14"/>
+    <!-- exhaust stack -->
+    <xacro:post_visual radius="0.06" length="0.5" material="dark_grey" xyz="-0.75 -0.9 1.45"/>
+
+    <!-- cab -->
+    <xacro:box_visual x="1.0" y="0.9" z="1.5" material="yellow" xyz="0.45 0.75 1.65"/>
+    <xacro:box_visual x="0.02" y="0.76" z="1.1" material="glass" xyz="0.96 0.75 1.8"/>
+    <xacro:box_visual x="0.8" y="0.02" z="0.9" material="glass" xyz="0.45 1.21 1.9"/>
+    <xacro:box_visual x="0.8" y="0.02" z="0.9" material="glass" xyz="0.45 0.29 1.9"/>
+    <xacro:box_visual x="0.02" y="0.76" z="0.6" material="glass" xyz="-0.06 0.75 2.0"/>
+    <xacro:box_visual x="1.06" y="0.96" z="0.06" material="dark_grey" xyz="0.45 0.75 2.43"/>
+    <xacro:post_visual radius="0.07" length="0.12" material="orange" xyz="0.0 1.05 2.52"/>
+
+    <!-- tool box / fuel tank with handrail, front right -->
+    <xacro:box_visual x="1.1" y="0.65" z="0.45" material="yellow" xyz="0.4 -0.95 1.125"/>
+    <xacro:post_visual radius="0.02" length="0.35" material="dark_grey" xyz="0.0 -1.22 1.525"/>
+    <xacro:post_visual radius="0.02" length="0.35" material="dark_grey" xyz="0.8 -1.22 1.525"/>
+    <xacro:rod x1="-0.02" z1="1.7" x2="0.82" z2="1.7" radius="0.02" material="dark_grey" y="-1.22"/>
+
+    <!-- boom foot brackets -->
+    <xacro:box_visual x="0.6" y="0.08" z="0.75" material="dark_grey" xyz="1.05 -0.01 0.975"/>
+    <xacro:box_visual x="0.6" y="0.08" z="0.75" material="dark_grey" xyz="1.05 -0.59 0.975"/>
+    <!-- boom cylinder base bracket -->
+    <xacro:box_visual x="0.6" y="0.6" z="0.3" material="dark_grey" xyz="1.3 -0.3 0.55"/>
+    <xacro:pin_visual radius="0.07" length="${2*boom_cyl_y + 0.25}" material="steel"
+                      xyz="${boom_cyl_base[0]} -0.3 ${boom_cyl_base[1]}"/>
+
+    <xacro:box_collision x="${house_size_x}" y="${house_size_y}" z="${house_size_z}"
+                         xyz="${house_offset_x} 0 ${house_size_z/2}"/>
+    <xacro:box_inertial mass="${house_mass}" x="${house_size_x}" y="${house_size_y}" z="${house_size_z}"
+                        xyz="${house_offset_x} 0 ${house_size_z/2}"/>
+  </link>
+
+  <joint name="swing_joint" type="revolute">
+    <parent link="base_link"/>
+    <child link="upper_structure"/>
+    <origin xyz="0 0 ${swing_z}" rpy="0 0 0"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="${-pi}" upper="${pi}" effort="50000" velocity="1.0"/>
+  </joint>
+
+  <!-- ===================== Boom ===================== -->
+  <link name="boom">
+    <!-- bent (banana) boom: foot → knee → tip -->
+    <xacro:beam x1="0" z1="0" x2="${boom_knee_x}" z2="${boom_knee_z}"
+                w="${boom_width}" h="${boom_height}" material="yellow"/>
+    <xacro:beam x1="${boom_knee_x}" z1="${boom_knee_z}" x2="${boom_length}" z2="0"
+                w="${boom_width - 0.05}" h="${boom_height - 0.12}" material="yellow"/>
+    <xacro:pin_visual radius="0.3" length="${boom_width}" material="yellow"
+                      xyz="${boom_knee_x} 0 ${boom_knee_z}"/>
+    <xacro:pin_visual radius="0.28" length="${boom_width}" material="yellow"/>
+    <xacro:pin_visual radius="0.15" length="0.75" material="steel"/>
+    <xacro:pin_visual radius="0.24" length="${boom_width - 0.05}" material="yellow"
+                      xyz="${boom_length} 0 0"/>
+    <!-- boom cylinder tip lug and pin -->
+    <xacro:box_visual x="0.35" y="${boom_width}" z="0.2" material="dark_grey"
+                      xyz="${boom_cyl_tip[0]} 0 ${boom_cyl_tip[1] + 0.05}"/>
+    <xacro:pin_visual radius="0.07" length="${2*boom_cyl_y + 0.25}" material="steel"
+                      xyz="${boom_cyl_tip[0]} 0 ${boom_cyl_tip[1]}"/>
+    <!-- arm cylinder base lug on top -->
+    <xacro:box_visual x="0.3" y="0.3" z="0.25" material="dark_grey"
+                      xyz="${arm_cyl_base[0]} 0 ${arm_cyl_base[1] - 0.13}"/>
+
+    <xacro:box_collision x="${boom_length}" y="${boom_width}" z="${boom_height}" xyz="${boom_length/2} 0 0"/>
+    <xacro:box_inertial mass="${boom_mass}" x="${boom_length}" y="${boom_width}" z="${boom_height}"
+                        xyz="${boom_length/2} 0 0"/>
+  </link>
+
+  <xacro:pitch_joint name="boom_joint" parent="upper_structure" child="boom"
+                     xyz="1.1 -0.3 1.2" lower="-0.6" upper="1.1" effort="200000" velocity="0.5"/>
+
+  <!-- ===================== Arm (stick) ===================== -->
+  <link name="arm">
+    <!-- tapered stick with a tail above the pivot for the arm cylinder -->
+    <xacro:beam x1="-0.2" z1="0.1" x2="1.2" z2="0.05" w="${arm_width}" h="0.55" material="yellow"/>
+    <xacro:beam x1="1.2" z1="0.05" x2="${arm_length}" z2="0" w="${arm_width - 0.04}" h="0.38" material="yellow"/>
+    <xacro:beam x1="-0.3" z1="0.1" x2="-0.45" z2="0.76" w="0.35" h="0.3" material="yellow"/>
+    <xacro:pin_visual radius="0.12" length="0.62" material="steel"/>
+    <xacro:pin_visual radius="0.19" length="${arm_width - 0.04}" material="yellow" xyz="${arm_length} 0 0"/>
+    <!-- bucket cylinder base lug -->
+    <xacro:box_visual x="0.25" y="0.25" z="0.2" material="dark_grey"
+                      xyz="${bucket_cyl_base[0]} 0 ${bucket_cyl_base[1] - 0.1}"/>
+
+    <xacro:box_collision x="${arm_length}" y="${arm_width}" z="${arm_height}" xyz="${arm_length/2} 0 0"/>
+    <xacro:box_inertial mass="${arm_mass}" x="${arm_length}" y="${arm_width}" z="${arm_height}"
+                        xyz="${arm_length/2} 0 0"/>
+  </link>
+
+  <xacro:pitch_joint name="arm_joint" parent="boom" child="arm"
+                     xyz="${boom_length} 0 0" lower="-2.6" upper="0.3" effort="150000" velocity="0.6"/>
+
+  <!-- ===================== Bucket ===================== -->
+  <link name="bucket">
+    <!-- mounting lugs and pivot pin -->
+    <xacro:box_visual x="0.5" y="0.05" z="0.25" material="dark_grey" xyz="0.15 0.2 -0.05"/>
+    <xacro:box_visual x="0.5" y="0.05" z="0.25" material="dark_grey" xyz="0.15 -0.2 -0.05"/>
+    <xacro:pin_visual radius="0.12" length="0.6" material="steel"/>
+    <!-- bucket cylinder tip lug -->
+    <xacro:beam x1="0.0" z1="0.0" x2="${bucket_cyl_tip[0]}" z2="${bucket_cyl_tip[1]}"
+                w="0.2" h="0.16" material="dark_grey"/>
+    <!-- curved shell: back → bottom → floor -->
+    <xacro:beam x1="0.0" z1="-0.08" x2="0.15" z2="-0.48" w="${bucket_width}" h="${bucket_plate}" material="yellow"/>
+    <xacro:beam x1="0.15" z1="-0.48" x2="0.5" z2="${-bucket_depth - 0.05}" w="${bucket_width}"
+                h="${bucket_plate}" material="yellow"/>
+    <xacro:beam x1="0.5" z1="${-bucket_depth - 0.05}" x2="${bucket_length}" z2="${-bucket_depth}"
+                w="${bucket_width}" h="${bucket_plate}" material="yellow"/>
+    <!-- side plates -->
+    <xacro:box_visual x="0.5" y="0.04" z="0.6" material="yellow" xyz="0.3 ${bucket_width/2} -0.33"/>
+    <xacro:box_visual x="0.5" y="0.04" z="0.6" material="yellow" xyz="0.3 ${-bucket_width/2} -0.33"/>
+    <xacro:beam x1="0.5" z1="-0.38" x2="${bucket_length}" z2="-0.47" w="0.04" h="0.3" material="yellow"
+                y="${bucket_width/2}"/>
+    <xacro:beam x1="0.5" z1="-0.38" x2="${bucket_length}" z2="-0.47" w="0.04" h="0.3" material="yellow"
+                y="${-bucket_width/2}"/>
+    <!-- cutting edge and teeth -->
+    <xacro:box_visual x="0.1" y="${bucket_width}" z="0.06" material="steel"
+                      xyz="${bucket_length} 0 ${-bucket_depth}"/>
+    <xacro:tooth y="-0.44"/>
+    <xacro:tooth y="-0.22"/>
+    <xacro:tooth y="0"/>
+    <xacro:tooth y="0.22"/>
+    <xacro:tooth y="0.44"/>
+
+    <xacro:box_collision x="${bucket_length}" y="${bucket_width}" z="${bucket_depth}"
+                         xyz="${bucket_length/2} 0 ${-bucket_depth/2}"/>
+    <xacro:box_inertial mass="${bucket_mass}" x="${bucket_length}" y="${bucket_width}" z="${bucket_depth}"
+                        xyz="${bucket_length/2} 0 ${-bucket_depth/2}"/>
+  </link>
+
+  <xacro:pitch_joint name="bucket_joint" parent="arm" child="bucket"
+                     xyz="${arm_length} 0 0" lower="-2.2" upper="1.0" effort="100000" velocity="0.8"/>
+
+  <!-- ===================== Hydraulic cylinders ===================== -->
+  <!-- boom joint is at y = -0.3 in upper_structure, so boom cylinder bases are offset to match -->
+  <xacro:hydraulic_cylinder name="boom_cyl_left" base="upper_structure" base_pin="${boom_cyl_base}"
+                            tip="boom" tip_pin="${boom_cyl_tip}" length="${boom_cyl_length}"
+                            base_y="${-0.3 + boom_cyl_y}" tip_y="${boom_cyl_y}"/>
+  <xacro:hydraulic_cylinder name="boom_cyl_right" base="upper_structure" base_pin="${boom_cyl_base}"
+                            tip="boom" tip_pin="${boom_cyl_tip}" length="${boom_cyl_length}"
+                            base_y="${-0.3 - boom_cyl_y}" tip_y="${-boom_cyl_y}"/>
+  <xacro:hydraulic_cylinder name="arm_cyl" base="boom" base_pin="${arm_cyl_base}"
+                            tip="arm" tip_pin="${arm_cyl_tip}" length="${arm_cyl_length}"/>
+  <xacro:hydraulic_cylinder name="bucket_cyl" base="arm" base_pin="${bucket_cyl_base}"
+                            tip="bucket" tip_pin="${bucket_cyl_tip}" length="${bucket_cyl_length}"/>
+
+</robot>
