@@ -38,6 +38,20 @@ arrive together without exceeding their URDF velocity limits; dragging a slider 
 | Dump | swung 90° to the cab side, bucket ~3.8 m up and tipped out |
 | Reset | all joints back to 0 |
 
+The **Bucket tip** panel moves the tip of the middle tooth (the `bucket_tip` frame) instead of
+single joints. Drag a slider or type a value and press Enter:
+
+| Field | Meaning |
+|---|---|
+| reach | distance from the swing axis, along the swing direction (m) |
+| height | height above the ground (m) |
+| bucket angle | pitch of the bucket (boom + arm + bucket angle); 0° as in the Reset pose, + tips it open |
+
+Changing one field keeps the other two fixed — e.g. lowering the height moves the tip straight
+down without tilting the bucket. Boom, arm and bucket angles are solved in closed form
+(`src/excavator_gui/excavator_gui/kinematics.py`); if no joint angles within the limits put the tip
+there, the panel says "Out of reach" and nothing moves. Swing stays on its own slider.
+
 A **Cylinders** panel under the buttons shows each hydraulic cylinder's stroke (0 % fully
 retracted, 100 % fully extended), its pin-to-pin length and its speed.
 
@@ -105,8 +119,8 @@ colcon test-result --verbose
 
 | Package | Tests |
 |---|---|
-| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, bucket faces the backhoe way, presets are reachable and put the bucket at the right height, launch file builds |
-| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping, preset poses and smooth motion (runs headless) |
+| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, bucket faces the backhoe way, `bucket_tip` is on the teeth and the GUI's tip kinematics match the URDF, presets are reachable and put the bucket at the right height, launch file builds |
+| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping, preset poses and smooth motion, bucket-tip forward/inverse kinematics and panel, cylinder panel (runs headless) |
 | `excavator_hydraulics` | cylinder parsing, quaternion maths, barrel and rod point at each other's pin for a range of joint angles, cylinder length range, stroke and speed |
 
 During development you can run one package's tests from its source folder with

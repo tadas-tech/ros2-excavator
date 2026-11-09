@@ -4,8 +4,9 @@ Slider GUI for the excavator.
 Waits for the URDF on /robot_description, builds one slider per movable
 joint (using the joint limits from the URDF) and publishes the slider
 positions on /joint_states. Preset buttons move the joints smoothly to a
-pose; dragging a slider stops the motion. A panel shows each hydraulic
-cylinder's stroke from /cylinder_states.
+pose; dragging a slider stops the motion. The bucket-tip panel moves the
+tip of the bucket to a reach, height and bucket angle (inverse kinematics),
+and a panel shows each hydraulic cylinder's stroke from /cylinder_states.
 """
 
 from collections import namedtuple
@@ -15,13 +16,14 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 
+from excavator_gui.kinematics import PlanarArm
 from excavator_gui.poses import Motion, PRESET_POSES
 from excavator_msgs.msg import CylinderStates
 
 from python_qt_binding.QtCore import Qt, QTimer
 from python_qt_binding.QtWidgets import (
-    QApplication, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QProgressBar,
-    QPushButton, QSlider, QVBoxLayout, QWidget,
+    QApplication, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout, QLabel,
+    QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 import rclpy
 from rclpy.node import Node
@@ -102,6 +104,59 @@ class JointSlider:
         self.value_label.setText(f'{pos:+.3f} rad  ({math.degrees(pos):+.1f}°)')
 
 
+class TipRow:
+    """
+    Slider plus number box for one bucket-tip coordinate.
+
+    Values are shown in display units (`factor` converts from internal
+    units, e.g. rad -> deg). Calls `on_change()` when the user edits either.
+    """
+
+    def __init__(self, name, unit, lower, upper, step, decimals, on_change, factor=1.0):
+        self.factor = factor
+        self.step = step
+        self.on_change = on_change
+        self.label = QLabel(name)
+        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider.setRange(round(lower / step), round(upper / step))
+        self.slider.setMinimumWidth(300)
+        self.spin = QDoubleSpinBox()
+        self.spin.setRange(lower, upper)
+        self.spin.setDecimals(decimals)
+        self.spin.setSingleStep(step)
+        self.spin.setSuffix(f' {unit}')
+        self.spin.setKeyboardTracking(False)  # apply typed values on Enter, not per key
+        self.spin.setMinimumWidth(150)
+        self.slider.valueChanged.connect(self._from_slider)
+        self.spin.valueChanged.connect(self._from_spin)
+
+    def value(self):
+        """Return the current value in internal units."""
+        return self.spin.value() / self.factor
+
+    def show_value(self, value, force=False):
+        """Display `value` (internal units) unless the user is editing this row."""
+        if not force and (self.slider.isSliderDown() or self.spin.hasFocus()):
+            return
+        shown = value * self.factor
+        for widget, v in ((self.spin, shown), (self.slider, round(shown / self.step))):
+            widget.blockSignals(True)
+            widget.setValue(v)
+            widget.blockSignals(False)
+
+    def _from_slider(self, step):
+        self.spin.blockSignals(True)
+        self.spin.setValue(step * self.step)
+        self.spin.blockSignals(False)
+        self.on_change()
+
+    def _from_spin(self, value):
+        self.slider.blockSignals(True)
+        self.slider.setValue(round(value / self.step))
+        self.slider.blockSignals(False)
+        self.on_change()
+
+
 class CylinderRow:
     """Name, stroke bar (0 % retracted .. 100 % extended) and readout for one cylinder."""
 
@@ -136,6 +191,8 @@ class SliderGui(QWidget):
         self.sliders = []
         self.motion = None
         self.motion_start = 0.0
+        self.arm = None       # PlanarArm, if the URDF has a bucket_tip
+        self.tip_rows = {}
         self.setWindowTitle('Excavator Joint Control')
 
         self.layout_main = QVBoxLayout(self)
@@ -191,11 +248,68 @@ class SliderGui(QWidget):
         reset_btn.clicked.connect(self._reset)
         buttons.addWidget(reset_btn)
         self.layout_main.addLayout(buttons)
+        self._build_tip_panel(msg.data)
         self.layout_main.addWidget(self.cylinder_box)
 
         self.status.setText(f'Controlling {len(self.sliders)} joints')
         self.node.get_logger().info(
             'Joints: ' + ', '.join(js.name for js in self.sliders))
+
+    def _build_tip_panel(self, urdf_xml):
+        try:
+            self.arm = PlanarArm.from_urdf(urdf_xml)
+        except (ValueError, ET.ParseError) as e:
+            self.node.get_logger().info(f'No bucket-tip control: {e}')
+            return
+        box = QGroupBox('Bucket tip')
+        grid = QGridLayout(box)
+        rows = (
+            ('reach', TipRow('reach', 'm', 0.0, 13.0, 0.01, 2, self._on_tip_edit)),
+            ('height', TipRow('height', 'm', -6.0, 10.0, 0.01, 2, self._on_tip_edit)),
+            ('angle', TipRow('bucket angle', '°', -180.0, 180.0, 0.5, 1, self._on_tip_edit,
+                             factor=180.0 / math.pi)),
+        )
+        for r, (key, row) in enumerate(rows):
+            grid.addWidget(row.label, r, 0)
+            grid.addWidget(row.slider, r, 1)
+            grid.addWidget(row.spin, r, 2)
+            self.tip_rows[key] = row
+        self.tip_status = QLabel()
+        self.tip_status.setStyleSheet('color: #c0392b')
+        grid.addWidget(self.tip_status, len(rows), 0, 1, 3)
+        self.layout_main.addWidget(box)
+        self._refresh_tip(force=True)
+
+    def joint_positions(self):
+        return {js.name: js.position() for js in self.sliders}
+
+    def _refresh_tip(self, force=False):
+        """Show the tip position for the current joint positions."""
+        if self.arm is None:
+            return
+        reach, height, angle = self.arm.forward(self.joint_positions())
+        angle = (angle + math.pi) % (2 * math.pi) - math.pi
+        for key, value in (('reach', reach), ('height', height), ('angle', angle)):
+            self.tip_rows[key].show_value(value, force)
+
+    def move_tip(self, reach, height, angle):
+        """Move the joints so the bucket tip is at (reach, height, angle); False if unreachable."""
+        current = self.joint_positions()
+        solution = self.arm.inverse(reach, height, angle, current)
+        if solution is None:
+            self.tip_status.setText('Out of reach: the joints cannot get the tip there.')
+            return False
+        self.stop_motion()
+        for js in self.sliders:
+            if js.name in solution:
+                js.set_position(solution[js.name])
+        self.tip_status.setText('')
+        return True
+
+    def _on_tip_edit(self):
+        rows = self.tip_rows
+        if not self.move_tip(rows['reach'].value(), rows['height'].value(), rows['angle'].value()):
+            self._refresh_tip(force=True)  # put the display back where the tip is
 
     def _on_cylinder_states(self, msg):
         for state in msg.cylinders:
@@ -241,6 +355,7 @@ class SliderGui(QWidget):
     def _publish(self):
         if not self.sliders:
             return
+        self._refresh_tip()
         msg = JointState()
         msg.header.stamp = self.node.get_clock().now().to_msg()
         msg.name = [js.name for js in self.sliders]
