@@ -65,9 +65,12 @@
   <xacro:property name="arm_height" value="0.45"/>
   <xacro:property name="arm_mass" value="900"/>
 
-  <xacro:property name="bucket_length" value="1.1"/>
+  <!-- Backhoe bucket: pins on the back (+Z side), opening faces -Z (towards the
+       machine when the arm hangs down). Profile points are (x, z) in the bucket frame. -->
+  <xacro:property name="bucket_length" value="1.2"/>   <!-- pivot to cutting edge along X -->
+  <xacro:property name="bucket_edge_z" value="-0.42"/> <!-- cutting edge -->
+  <xacro:property name="bucket_back_z" value="0.30"/>  <!-- outermost point of the back -->
   <xacro:property name="bucket_width" value="1.1"/>
-  <xacro:property name="bucket_depth" value="0.6"/>
   <xacro:property name="bucket_plate" value="0.05"/>
   <xacro:property name="bucket_mass" value="700"/>
 
@@ -268,10 +271,10 @@
     </joint>
   </xacro:macro>
 
-  <!-- Bucket tooth at lateral position y. -->
+  <!-- Bucket tooth at lateral position y, pointing out of the cutting edge (-Z). -->
   <xacro:macro name="tooth" params="y">
-    <xacro:box_visual x="0.2" y="0.1" z="0.06" material="steel"
-                      xyz="${bucket_length + 0.12} ${y} ${-bucket_depth - 0.02}"/>
+    <xacro:box_visual x="0.08" y="0.1" z="0.2" material="steel"
+                      xyz="${bucket_length} ${y} ${bucket_edge_z - 0.12}"/>
   </xacro:macro>
 
   <!-- ===================== Undercarriage ===================== -->
@@ -408,39 +411,40 @@
 
   <!-- ===================== Bucket ===================== -->
   <link name="bucket">
-    <!-- mounting lugs and pivot pin -->
-    <xacro:box_visual x="0.5" y="0.05" z="0.25" material="dark_grey" xyz="0.15 0.2 -0.05"/>
-    <xacro:box_visual x="0.5" y="0.05" z="0.25" material="dark_grey" xyz="0.15 -0.2 -0.05"/>
+    <!-- mounting lugs (ears) on the back and pivot pin -->
+    <xacro:box_visual x="0.3" y="0.05" z="0.25" material="dark_grey" xyz="0.1 0.2 0.08"/>
+    <xacro:box_visual x="0.3" y="0.05" z="0.25" material="dark_grey" xyz="0.1 -0.2 0.08"/>
     <xacro:pin_visual radius="0.12" length="0.6" material="steel"/>
-    <!-- bucket cylinder tip lug -->
+    <!-- bucket cylinder tip lug, on the back -->
     <xacro:beam x1="0.0" z1="0.0" x2="${bucket_cyl_tip[0]}" z2="${bucket_cyl_tip[1]}"
                 w="0.2" h="0.16" material="dark_grey"/>
-    <!-- curved shell: back → bottom → floor -->
-    <xacro:beam x1="0.0" z1="-0.08" x2="0.15" z2="-0.48" w="${bucket_width}" h="${bucket_plate}" material="yellow"/>
-    <xacro:beam x1="0.15" z1="-0.48" x2="0.5" z2="${-bucket_depth - 0.05}" w="${bucket_width}"
+    <!-- shell: top wall at the pins → back → heel → floor to the cutting edge -->
+    <xacro:beam x1="0.0" z1="0.05" x2="0.12" z2="-0.22" w="${bucket_width}" h="${bucket_plate}" material="yellow"/>
+    <xacro:beam x1="0.0" z1="0.12" x2="0.75" z2="${bucket_back_z}" w="${bucket_width}" h="${bucket_plate}"
+                material="yellow"/>
+    <xacro:beam x1="0.75" z1="${bucket_back_z}" x2="1.12" z2="0.1" w="${bucket_width}" h="${bucket_plate}"
+                material="yellow"/>
+    <xacro:beam x1="1.12" z1="0.1" x2="${bucket_length}" z2="${bucket_edge_z}" w="${bucket_width}"
                 h="${bucket_plate}" material="yellow"/>
-    <xacro:beam x1="0.5" z1="${-bucket_depth - 0.05}" x2="${bucket_length}" z2="${-bucket_depth}"
-                w="${bucket_width}" h="${bucket_plate}" material="yellow"/>
     <!-- side plates -->
-    <xacro:box_visual x="0.5" y="0.04" z="0.6" material="yellow" xyz="0.3 ${bucket_width/2} -0.33"/>
-    <xacro:box_visual x="0.5" y="0.04" z="0.6" material="yellow" xyz="0.3 ${-bucket_width/2} -0.33"/>
-    <xacro:beam x1="0.5" z1="-0.38" x2="${bucket_length}" z2="-0.47" w="0.04" h="0.3" material="yellow"
-                y="${bucket_width/2}"/>
-    <xacro:beam x1="0.5" z1="-0.38" x2="${bucket_length}" z2="-0.47" w="0.04" h="0.3" material="yellow"
-                y="${-bucket_width/2}"/>
+    <xacro:box_visual x="0.63" y="0.04" z="0.42" material="yellow" xyz="0.435 ${bucket_width/2} -0.01"/>
+    <xacro:box_visual x="0.63" y="0.04" z="0.42" material="yellow" xyz="0.435 ${-bucket_width/2} -0.01"/>
+    <xacro:box_visual x="0.4" y="0.04" z="0.6" material="yellow" xyz="0.95 ${bucket_width/2} -0.1"/>
+    <xacro:box_visual x="0.4" y="0.04" z="0.6" material="yellow" xyz="0.95 ${-bucket_width/2} -0.1"/>
     <!-- cutting edge and teeth -->
-    <xacro:box_visual x="0.1" y="${bucket_width}" z="0.06" material="steel"
-                      xyz="${bucket_length} 0 ${-bucket_depth}"/>
+    <xacro:box_visual x="0.08" y="${bucket_width}" z="0.08" material="steel"
+                      xyz="${bucket_length} 0 ${bucket_edge_z}"/>
     <xacro:tooth y="-0.44"/>
     <xacro:tooth y="-0.22"/>
     <xacro:tooth y="0"/>
     <xacro:tooth y="0.22"/>
     <xacro:tooth y="0.44"/>
 
-    <xacro:box_collision x="${bucket_length}" y="${bucket_width}" z="${bucket_depth}"
-                         xyz="${bucket_length/2} 0 ${-bucket_depth/2}"/>
-    <xacro:box_inertial mass="${bucket_mass}" x="${bucket_length}" y="${bucket_width}" z="${bucket_depth}"
-                        xyz="${bucket_length/2} 0 ${-bucket_depth/2}"/>
+    <xacro:box_collision x="${bucket_length}" y="${bucket_width}" z="${bucket_back_z - bucket_edge_z}"
+                         xyz="${bucket_length/2} 0 ${(bucket_back_z + bucket_edge_z)/2}"/>
+    <xacro:box_inertial mass="${bucket_mass}" x="${bucket_length}" y="${bucket_width}"
+                        z="${bucket_back_z - bucket_edge_z}"
+                        xyz="${bucket_length/2} 0 ${(bucket_back_z + bucket_edge_z)/2}"/>
   </link>
 
   <xacro:pitch_joint name="bucket_joint" parent="arm" child="bucket"
