@@ -22,7 +22,23 @@ extend and retract with the joints.
 | `arm_joint` | arm (stick) | −2.6 … 0.3 |
 | `bucket_joint` | bucket | −2.2 … 1.0 |
 
-Positive angles raise the boom, arm and bucket.
+Positive angles raise the boom, arm and bucket. For the bucket that means opening it (tipping the
+load out); negative curls it in towards the machine.
+
+## Slider GUI
+
+One slider per joint, plus buttons that move the joints smoothly to a preset pose. All joints
+arrive together without exceeding their URDF velocity limits; dragging a slider stops the motion.
+
+| Button | Pose |
+|---|---|
+| Transport | arm folded in, bucket curled and carried ~0.5 m above the ground |
+| Dig | arm reaching out ~9 m, bucket opened, teeth just into the ground |
+| Dump | swung 90° to the cab side, bucket ~3.8 m up and tipped out |
+| Reset | all joints back to 0 |
+
+The poses are in `src/excavator_gui/excavator_gui/poses.py`; `test_urdf.py` checks they are within
+the joint limits and that the bucket ends up at the right height.
 
 ## Requirements
 
@@ -77,8 +93,8 @@ colcon test-result --verbose
 
 | Package | Tests |
 |---|---|
-| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, launch file builds |
-| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping (runs headless) |
+| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, bucket faces the backhoe way, presets are reachable and put the bucket at the right height, launch file builds |
+| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping, preset poses and smooth motion (runs headless) |
 | `excavator_hydraulics` | cylinder parsing, quaternion maths, barrel and rod point at each other's pin for a range of joint angles |
 
 During development you can run one package's tests from its source folder with

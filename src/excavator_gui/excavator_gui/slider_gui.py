@@ -3,13 +3,18 @@ Slider GUI for the excavator.
 
 Waits for the URDF on /robot_description, builds one slider per movable
 joint (using the joint limits from the URDF) and publishes the slider
-positions on /joint_states.
+positions on /joint_states. Preset buttons move the joints smoothly to a
+pose; dragging a slider stops the motion.
 """
 
+from collections import namedtuple
 import math
 import signal
 import sys
+import time
 import xml.etree.ElementTree as ET
+
+from excavator_gui.poses import Motion, PRESET_POSES
 
 from python_qt_binding.QtCore import Qt, QTimer
 from python_qt_binding.QtWidgets import (
@@ -24,10 +29,13 @@ from std_msgs.msg import String
 
 SLIDER_STEPS = 1000
 PUBLISH_RATE_HZ = 30.0
+MOTION_RATE_HZ = 50.0
+
+Joint = namedtuple('Joint', 'name lower upper velocity')
 
 
 def parse_joints(urdf_xml):
-    """Return [(name, lower, upper)] for every non-fixed joint in the URDF."""
+    """Return a Joint for every movable joint in the URDF (velocity None if unset)."""
     joints = []
     for joint in ET.fromstring(urdf_xml).iter('joint'):
         jtype = joint.get('type')
@@ -39,18 +47,22 @@ def parse_joints(urdf_xml):
         else:
             lower = float(limit.get('lower', -math.pi))
             upper = float(limit.get('upper', math.pi))
-        joints.append((joint.get('name'), lower, upper))
+        velocity = limit.get('velocity') if limit is not None else None
+        velocity = float(velocity) if velocity and float(velocity) > 0 else None
+        joints.append(Joint(joint.get('name'), lower, upper, velocity))
     return joints
 
 
 class JointSlider:
     """A labelled slider that maps integer steps to a joint position."""
 
-    def __init__(self, name, lower, upper):
+    def __init__(self, name, lower, upper, velocity=None, on_user_move=None):
         self.name = name
         self.lower = lower
         self.upper = upper
+        self.velocity = velocity
         self.default = min(max(0.0, lower), upper)
+        self.on_user_move = on_user_move
 
         self.label = QLabel(name)
         self.value_label = QLabel()
@@ -80,6 +92,8 @@ class JointSlider:
     def _on_slider_moved(self, step):
         self._position = self.lower + step / SLIDER_STEPS * (self.upper - self.lower)
         self._update_label()
+        if self.on_user_move:
+            self.on_user_move()
 
     def _update_label(self):
         pos = self._position
@@ -92,6 +106,8 @@ class SliderGui(QWidget):
         super().__init__()
         self.node = node
         self.sliders = []
+        self.motion = None
+        self.motion_start = 0.0
         self.setWindowTitle('Excavator Joint Control')
 
         self.layout_main = QVBoxLayout(self)
@@ -107,6 +123,9 @@ class SliderGui(QWidget):
         self.publish_timer.timeout.connect(self._publish)
         self.publish_timer.start(int(1000 / PUBLISH_RATE_HZ))
 
+        self.motion_timer = QTimer(self)
+        self.motion_timer.timeout.connect(self._step_motion)
+
     def _on_description(self, msg):
         if self.sliders:
             return
@@ -117,8 +136,8 @@ class SliderGui(QWidget):
             return
 
         grid = QGridLayout()
-        for row, (name, lower, upper) in enumerate(joints):
-            js = JointSlider(name, lower, upper)
+        for row, joint in enumerate(joints):
+            js = JointSlider(*joint, on_user_move=self.stop_motion)
             grid.addWidget(js.label, row, 0)
             grid.addWidget(js.slider, row, 1)
             grid.addWidget(js.value_label, row, 2)
@@ -126,9 +145,15 @@ class SliderGui(QWidget):
         self.layout_main.addLayout(grid)
 
         buttons = QHBoxLayout()
+        self.pose_buttons = {}
+        for name, pose in PRESET_POSES.items():
+            btn = QPushButton(name)
+            btn.clicked.connect(lambda _=False, pose=pose: self.move_to(pose))
+            buttons.addWidget(btn)
+            self.pose_buttons[name] = btn
+        buttons.addStretch()
         reset_btn = QPushButton('Reset')
         reset_btn.clicked.connect(self._reset)
-        buttons.addStretch()
         buttons.addWidget(reset_btn)
         self.layout_main.addLayout(buttons)
 
@@ -137,8 +162,32 @@ class SliderGui(QWidget):
             'Joints: ' + ', '.join(js.name for js in self.sliders))
 
     def _reset(self):
-        for js in self.sliders:
-            js.reset()
+        self.move_to({js.name: js.default for js in self.sliders})
+
+    def move_to(self, pose, now=None):
+        """Start a smooth motion to `pose` ({joint: position}); unknown joints are ignored."""
+        by_name = {js.name: js for js in self.sliders}
+        target = {name: min(max(value, by_name[name].lower), by_name[name].upper)
+                  for name, value in pose.items() if name in by_name}
+        self.motion = Motion(
+            {js.name: js.position() for js in self.sliders}, target,
+            {js.name: js.velocity for js in self.sliders})
+        self.motion_start = time.monotonic() if now is None else now
+        self.motion_timer.start(int(1000 / MOTION_RATE_HZ))
+
+    def stop_motion(self):
+        self.motion = None
+        self.motion_timer.stop()
+
+    def _step_motion(self, now=None):
+        if self.motion is None:
+            return
+        elapsed = (time.monotonic() if now is None else now) - self.motion_start
+        by_name = {js.name: js for js in self.sliders}
+        for name, value in self.motion.positions(elapsed).items():
+            by_name[name].set_position(value)
+        if self.motion.done(elapsed):
+            self.stop_motion()
 
     def _publish(self):
         if not self.sliders:

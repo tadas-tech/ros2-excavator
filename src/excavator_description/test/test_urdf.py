@@ -191,3 +191,101 @@ def test_boom_cylinders_are_mirror_images(robot):
     left, *_ = pin_distances(robot, 'boom_cyl_left')
     right, *_ = pin_distances(robot, 'boom_cyl_right')
     np.testing.assert_allclose(left, right, atol=1e-9)
+
+
+# ---------------------------------------------------------------- preset poses
+
+def link_transform(robot, link, q):
+    """4x4 transform base_footprint -> link for joint positions q."""
+    by_child = joints_by_child(robot)
+    M = np.eye(4)
+    while link in by_child:
+        joint = by_child[link]
+        origin = joint.find('origin')
+        A = np.eye(4)
+        A[:3, :3] = rpy_matrix(*vec(origin, 'rpy'))
+        A[:3, 3] = vec(origin, 'xyz')
+        if joint.get('type') in ('revolute', 'continuous'):
+            R = np.eye(4)
+            R[:3, :3] = axis_angle_matrix(vec(joint.find('axis'), 'xyz', '1 0 0'),
+                                          q.get(joint.get('name'), 0.0))
+            A = A @ R
+        M = A @ M
+        link = joint.find('parent').get('link')
+    return M
+
+
+def visual_points(link):
+    """Corner / rim points of a link's box and cylinder visuals, in the link frame."""
+    points = []
+    for visual in link.findall('visual'):
+        origin = visual.find('origin')
+        R, p = rpy_matrix(*vec(origin, 'rpy')), vec(origin, 'xyz')
+        geom = visual.find('geometry')[0]
+        if geom.tag == 'box':
+            sx, sy, sz = vec(geom, 'size')
+            local = [(x, y, z) for x in (-sx / 2, sx / 2) for y in (-sy / 2, sy / 2)
+                     for z in (-sz / 2, sz / 2)]
+        elif geom.tag == 'cylinder':
+            r, h = float(geom.get('radius')), float(geom.get('length'))
+            angles = np.linspace(0, 2 * math.pi, 16, endpoint=False)
+            local = [(r * math.cos(a), r * math.sin(a), z)
+                     for a in angles for z in (-h / 2, h / 2)]
+        else:
+            continue
+        points += [R @ np.array(pt) + p for pt in local]
+    return np.array(points)
+
+
+def bucket_lowest_point(robot, q):
+    bucket = next(link for link in robot.iter('link') if link.get('name') == 'bucket')
+    M = link_transform(robot, 'bucket', q)
+    pts = visual_points(bucket)
+    return (pts @ M[:3, :3].T + M[:3, 3])[:, 2].min()
+
+
+@pytest.fixture(scope='module')
+def presets():
+    from excavator_gui.poses import PRESET_POSES
+    return PRESET_POSES
+
+
+def test_presets_within_joint_limits(robot, presets):
+    joints = {j.get('name'): j for j in robot.iter('joint')}
+    for pose_name, pose in presets.items():
+        for name, value in pose.items():
+            assert name in joints, f'{pose_name}: unknown joint {name}'
+            if joints[name].get('type') == 'continuous':
+                continue
+            limit = joints[name].find('limit')
+            assert float(limit.get('lower')) <= value <= float(limit.get('upper')), \
+                f'{pose_name}: {name}={value} outside its limits'
+
+
+@pytest.mark.parametrize('pose_name, low, high', [
+    ('Transport', 0.3, 1.0),   # carried just above the ground
+    ('Dig', -0.4, 0.0),        # teeth just into the ground
+    ('Dump', 3.0, 5.0),        # above a truck bed
+])
+def test_preset_bucket_height(robot, presets, pose_name, low, high):
+    lowest = bucket_lowest_point(robot, presets[pose_name])
+    assert low <= lowest <= high, f'{pose_name}: bucket lowest point at {lowest:.2f} m'
+
+
+def test_bucket_opens_away_from_its_pins(robot):
+    """
+    Backhoe bucket: the body is on the cylinder-pin side of the pivot-teeth line.
+
+    That puts the opening on the other side, so curling (negative) scoops
+    towards the machine and leaves the opening facing up to carry a load.
+    """
+    bucket = next(link for link in robot.iter('link') if link.get('name') == 'bucket')
+    pts = visual_points(bucket)[:, [0, 2]]               # bucket frame, XZ
+    teeth = pts[np.argmax(np.linalg.norm(pts, axis=1))]  # farthest point from the pivot
+    rod = next(j for j in robot.iter('joint') if j.get('name') == 'bucket_cyl_rod_joint')
+    pin = vec(rod.find('origin'), 'xyz')[[0, 2]]
+
+    def side(p):
+        return np.sign(teeth[0] * p[1] - teeth[1] * p[0])
+
+    assert side(pts.mean(axis=0)) == side(pin)
