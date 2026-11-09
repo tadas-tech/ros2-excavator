@@ -1,6 +1,7 @@
-"""Show the excavator in RViz with a GUI to drive its joints.
+"""
+Show the excavator in RViz with a GUI to drive its joints.
 
-Arguments:
+Launch arguments:
   gui:=slider  (default) the excavator_gui slider window
   gui:=jsp     joint_state_publisher_gui
   gui:=none    no GUI, joint states must come from elsewhere

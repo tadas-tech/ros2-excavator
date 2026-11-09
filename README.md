@@ -17,7 +17,7 @@ extend and retract with the joints.
 
 | Joint | Moves | Range (rad) |
 |---|---|---|
-| `swing_joint` | upper body on the tracks | −3.14 … 3.14 |
+| `swing_joint` | upper body on the tracks | continuous (no limit; slider covers −π … π) |
 | `boom_joint` | boom | −0.6 … 1.1 |
 | `arm_joint` | arm (stick) | −2.6 … 0.3 |
 | `bucket_joint` | bucket | −2.2 … 1.0 |
@@ -26,8 +26,14 @@ Positive angles raise the boom, arm and bucket.
 
 ## Requirements
 
-ROS 2 Lyrical with `xacro`, `robot_state_publisher`, `rviz2`, `tf2_ros`, `python_qt_binding`,
-and optionally `joint_state_publisher_gui`:
+ROS 2 Lyrical with `xacro`, `robot_state_publisher`, `rviz2`, `tf2_ros`, `python_qt_binding`
+and `joint_state_publisher_gui` (used by `gui:=jsp`). `rosdep` installs them all:
+
+```bash
+rosdep install --from-paths src --ignore-src -y
+```
+
+or with apt:
 
 ```bash
 sudo apt install ros-lyrical-xacro ros-lyrical-joint-state-publisher-gui
@@ -59,4 +65,21 @@ attached by floating joints. `robot_state_publisher` and the joint GUIs ignore f
 
 Pin positions and lengths are properties at the top of `excavator.urdf.xacro`. When changing them,
 barrel and rod length must each be ≤ the shortest pin-to-pin distance over the joint range, and
-together ≥ the longest.
+together ≥ the longest. `test_urdf.py` checks this.
+
+## Tests
+
+```bash
+colcon build
+colcon test
+colcon test-result --verbose
+```
+
+| Package | Tests |
+|---|---|
+| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, launch file builds |
+| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping (runs headless) |
+| `excavator_hydraulics` | cylinder parsing, quaternion maths, barrel and rod point at each other's pin for a range of joint angles |
+
+During development you can run one package's tests from its source folder with
+`python3 -m pytest test`.

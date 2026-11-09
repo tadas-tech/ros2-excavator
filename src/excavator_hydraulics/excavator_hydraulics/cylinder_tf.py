@@ -1,4 +1,5 @@
-"""TF publisher for hydraulic cylinders.
+"""
+TF publisher for hydraulic cylinders.
 
 Finds every cylinder in the URDF on /robot_description: a pair of links
 <name>_barrel and <name>_rod attached by floating joints. The barrel's joint
@@ -8,12 +9,12 @@ are re-published so the barrel's and the rod's +X axes point at each other's
 pin, which makes the cylinder extend and retract with the joints.
 """
 
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass
+import xml.etree.ElementTree as ET
 
+from geometry_msgs.msg import TransformStamped
 import numpy as np
 import rclpy
-from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile
 from rclpy.time import Time

@@ -12,6 +12,7 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    extras_require={'test': ['pytest']},
     maintainer='tadas',
     maintainer_email='tadasrasimavicius@outlook.com',
     description='Qt slider GUI that publishes joint states for the excavator.',

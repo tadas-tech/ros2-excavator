@@ -12,6 +12,7 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    extras_require={'test': ['pytest']},
     maintainer='tadas',
     maintainer_email='tadasrasimavicius@outlook.com',
     description="Publishes TF for the excavator's hydraulic cylinder barrels and rods.",

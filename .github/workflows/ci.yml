@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: ros:lyrical
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          apt-get update
+          rosdep update
+          rosdep install --from-paths src --ignore-src -y
+
+      - name: Build
+        shell: bash
+        run: |
+          source /opt/ros/lyrical/setup.bash
+          colcon build --event-handlers console_cohesion+
+
+      - name: Test
+        shell: bash
+        run: |
+          source /opt/ros/lyrical/setup.bash
+          colcon test --event-handlers console_cohesion+
+          colcon test-result --verbose
