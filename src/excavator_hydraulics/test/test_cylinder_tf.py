@@ -3,7 +3,8 @@
 import math
 
 from excavator_hydraulics.cylinder_tf import (
-    CylinderTf, parse_cylinders, quat_to_matrix, quat_x_to,
+    CylinderTf, length_range, parse_cylinders, quat_to_matrix, quat_x_to,
+    VELOCITY_TIMEOUT,
 )
 from geometry_msgs.msg import TransformStamped
 import numpy as np
@@ -121,11 +122,21 @@ class FakeBroadcaster:
         self.sent.append(list(transforms))
 
 
+class FakePublisher:
+
+    def __init__(self):
+        self.sent = []
+
+    def publish(self, msg):
+        self.sent.append(msg)
+
+
 @pytest.fixture
 def node():
     rclpy.init()
     node = CylinderTf()
     node.tf_broadcaster = FakeBroadcaster()
+    node.state_pub = FakePublisher()
     node._on_description(String(data=URDF))
     yield node
     node.destroy_node()
@@ -212,3 +223,77 @@ def test_unchanged_transform_is_not_republished(node):
     set_hinge(node, 0.3, sec=2)
     node._publish()
     assert len(node.tf_broadcaster.sent) == 2
+
+
+# ---------------------------------------------------------------- length range and states
+
+def pin_distance(angle):
+    c, s_ = math.cos(angle), math.sin(angle)
+    R = np.array([[c, 0, -s_], [0, 1, 0], [s_, 0, c]])  # rotation by angle about -Y
+    return np.linalg.norm(R @ TIP_PIN + HINGE_OFFSET - BASE_PIN)
+
+
+def test_length_range_matches_brute_force():
+    cyl = parse_cylinders(URDF)[0]
+    lengths = [pin_distance(a) for a in np.linspace(-1, 1, 20001)]
+    assert cyl.min_length == pytest.approx(min(lengths), abs=1e-5)
+    assert cyl.max_length == pytest.approx(max(lengths), abs=1e-5)
+    assert cyl.min_length < cyl.max_length
+
+
+def test_length_range_unknown_without_a_direct_joint():
+    # rod hangs from a link that is not joined directly to the barrel's link
+    urdf = URDF.replace('<parent link="tip"/><child link="lift_rod"/>',
+                        '<parent link="base"/><child link="lift_rod"/>')
+    cyl = parse_cylinders(urdf)[0]
+    assert math.isnan(cyl.min_length) and math.isnan(cyl.max_length)
+
+
+def test_length_range_of_fixed_joint_is_unknown():
+    import xml.etree.ElementTree as ET
+    joint = ET.fromstring(
+        '<joint name="j" type="fixed"><parent link="a"/><child link="b"/></joint>')
+    assert all(math.isnan(v) for v in length_range(joint, BASE_PIN, TIP_PIN))
+
+
+def test_states_published_with_length_and_stroke(node):
+    set_hinge(node, 0.4, sec=1)
+    node._publish(now=0.0)
+    assert len(node.state_pub.sent) == 1
+    (state,) = node.state_pub.sent[0].cylinders
+    cyl = node.cylinders[0]
+    assert state.name == 'lift'
+    assert state.length == pytest.approx(pin_distance(0.4))
+    assert state.min_length == cyl.min_length
+    assert state.max_length == cyl.max_length
+    assert state.stroke == pytest.approx(state.length - cyl.min_length)
+    assert state.velocity == 0.0  # first sample: no speed yet
+
+
+def test_no_states_before_first_transform(node):
+    node._publish(now=0.0)
+    assert node.state_pub.sent == []
+
+
+def test_velocity_from_consecutive_transforms(node):
+    set_hinge(node, 0.0, sec=1)
+    node._publish(now=0.0)
+    set_hinge(node, 0.2, sec=2)
+    node._publish(now=1.0)
+    state = node.state_pub.sent[-1].cylinders[0]
+    assert state.velocity == pytest.approx(pin_distance(0.2) - pin_distance(0.0))
+
+
+def test_velocity_held_through_short_gaps_then_zero(node):
+    set_hinge(node, 0.0, sec=1)
+    node._publish(now=0.0)
+    set_hinge(node, 0.2, sec=2)
+    node._publish(now=1.0)
+    moving = node.state_pub.sent[-1].cylinders[0].velocity
+    assert moving != 0.0
+
+    node._publish(now=1.0 + VELOCITY_TIMEOUT / 2)  # no new transform yet
+    assert node.state_pub.sent[-1].cylinders[0].velocity == moving
+
+    node._publish(now=1.0 + VELOCITY_TIMEOUT * 2)  # joints stopped
+    assert node.state_pub.sent[-1].cylinders[0].velocity == 0.0

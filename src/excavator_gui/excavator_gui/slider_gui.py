@@ -4,7 +4,8 @@ Slider GUI for the excavator.
 Waits for the URDF on /robot_description, builds one slider per movable
 joint (using the joint limits from the URDF) and publishes the slider
 positions on /joint_states. Preset buttons move the joints smoothly to a
-pose; dragging a slider stops the motion.
+pose; dragging a slider stops the motion. A panel shows each hydraulic
+cylinder's stroke from /cylinder_states.
 """
 
 from collections import namedtuple
@@ -15,11 +16,12 @@ import time
 import xml.etree.ElementTree as ET
 
 from excavator_gui.poses import Motion, PRESET_POSES
+from excavator_msgs.msg import CylinderStates
 
 from python_qt_binding.QtCore import Qt, QTimer
 from python_qt_binding.QtWidgets import (
-    QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSlider,
-    QVBoxLayout, QWidget,
+    QApplication, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QProgressBar,
+    QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 import rclpy
 from rclpy.node import Node
@@ -100,6 +102,32 @@ class JointSlider:
         self.value_label.setText(f'{pos:+.3f} rad  ({math.degrees(pos):+.1f}°)')
 
 
+class CylinderRow:
+    """Name, stroke bar (0 % retracted .. 100 % extended) and readout for one cylinder."""
+
+    def __init__(self, name):
+        self.label = QLabel(name)
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setMinimumWidth(300)
+        self.value_label = QLabel()
+        self.value_label.setMinimumWidth(260)
+
+    def update(self, state):
+        full = state.max_length - state.min_length
+        if math.isfinite(full) and full > 0:
+            percent = min(max(state.stroke / full, 0.0), 1.0) * 100
+            self.bar.setValue(round(percent))
+            self.bar.setFormat(f'{percent:.0f} %')
+            stroke = f'stroke {state.stroke:.3f} / {full:.3f} m'
+        else:
+            self.bar.setValue(0)
+            self.bar.setFormat('range unknown')
+            stroke = 'stroke ?'
+        self.value_label.setText(
+            f'{state.length:.3f} m   {stroke}   {state.velocity:+.2f} m/s')
+
+
 class SliderGui(QWidget):
 
     def __init__(self, node):
@@ -118,6 +146,13 @@ class SliderGui(QWidget):
         self.desc_sub = node.create_subscription(
             String, 'robot_description', self._on_description, qos)
         self.pub = node.create_publisher(JointState, 'joint_states', 10)
+        self.cylinder_rows = {}
+        self.cylinder_grid = QGridLayout()
+        self.cylinder_box = QGroupBox('Cylinders')
+        self.cylinder_box.setLayout(self.cylinder_grid)
+        self.cylinder_box.hide()  # until the first /cylinder_states message
+        self.cyl_sub = node.create_subscription(
+            CylinderStates, 'cylinder_states', self._on_cylinder_states, qos)
 
         self.publish_timer = QTimer(self)
         self.publish_timer.timeout.connect(self._publish)
@@ -156,10 +191,24 @@ class SliderGui(QWidget):
         reset_btn.clicked.connect(self._reset)
         buttons.addWidget(reset_btn)
         self.layout_main.addLayout(buttons)
+        self.layout_main.addWidget(self.cylinder_box)
 
         self.status.setText(f'Controlling {len(self.sliders)} joints')
         self.node.get_logger().info(
             'Joints: ' + ', '.join(js.name for js in self.sliders))
+
+    def _on_cylinder_states(self, msg):
+        for state in msg.cylinders:
+            row = self.cylinder_rows.get(state.name)
+            if row is None:
+                row = CylinderRow(state.name)
+                r = len(self.cylinder_rows)
+                self.cylinder_grid.addWidget(row.label, r, 0)
+                self.cylinder_grid.addWidget(row.bar, r, 1)
+                self.cylinder_grid.addWidget(row.value_label, r, 2)
+                self.cylinder_rows[state.name] = row
+            row.update(state)
+        self.cylinder_box.show()
 
     def _reset(self):
         self.move_to({js.name: js.default for js in self.sliders})

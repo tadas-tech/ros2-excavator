@@ -192,3 +192,42 @@ def test_targets_are_clamped_and_unknown_joints_ignored(gui):
 
 def time_after(gui):
     return gui.motion_start + gui.motion.duration
+
+
+# ---------------------------------------------------------------- cylinder panel
+
+def cylinder_states(**cylinders):
+    from excavator_msgs.msg import CylinderState, CylinderStates
+    msg = CylinderStates()
+    for name, (length, lo, hi, velocity) in cylinders.items():
+        msg.cylinders.append(CylinderState(
+            name=name, length=length, min_length=lo, max_length=hi,
+            stroke=length - lo, velocity=velocity))
+    return msg
+
+
+def test_cylinder_panel_hidden_until_first_message(gui):
+    assert gui.cylinder_box.isHidden()
+    gui._on_cylinder_states(cylinder_states(arm_cyl=(3.0, 2.5, 4.5, 0.0)))
+    assert not gui.cylinder_box.isHidden()
+
+
+def test_cylinder_rows_show_stroke(gui):
+    gui._on_cylinder_states(cylinder_states(
+        arm_cyl=(3.0, 2.5, 4.5, 0.25), bucket_cyl=(2.9, 2.9, 3.7, -0.1)))
+    arm, bucket = gui.cylinder_rows['arm_cyl'], gui.cylinder_rows['bucket_cyl']
+    assert arm.bar.value() == 25
+    assert arm.value_label.text() == '3.000 m   stroke 0.500 / 2.000 m   +0.25 m/s'
+    assert bucket.bar.value() == 0
+
+    gui._on_cylinder_states(cylinder_states(arm_cyl=(4.5, 2.5, 4.5, 0.0)))
+    assert arm.bar.value() == 100
+    assert len(gui.cylinder_rows) == 2  # rows are reused, not added again
+
+
+def test_cylinder_with_unknown_range(gui):
+    nan = float('nan')
+    gui._on_cylinder_states(cylinder_states(odd_cyl=(1.5, nan, nan, 0.0)))
+    row = gui.cylinder_rows['odd_cyl']
+    assert row.bar.format() == 'range unknown'
+    assert 'stroke ?' in row.value_label.text()
