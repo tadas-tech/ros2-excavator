@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-latest
     container: ros:lyrical
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install dependencies
         shell: bash
