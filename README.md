@@ -59,4 +59,21 @@ attached by floating joints. `robot_state_publisher` and the joint GUIs ignore f
 
 Pin positions and lengths are properties at the top of `excavator.urdf.xacro`. When changing them,
 barrel and rod length must each be ≤ the shortest pin-to-pin distance over the joint range, and
-together ≥ the longest.
+together ≥ the longest. `test_urdf.py` checks this.
+
+## Tests
+
+```bash
+colcon build
+colcon test
+colcon test-result --verbose
+```
+
+| Package | Tests |
+|---|---|
+| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, launch file builds |
+| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping (runs headless) |
+| `excavator_hydraulics` | cylinder parsing, quaternion maths, barrel and rod point at each other's pin for a range of joint angles |
+
+During development you can run one package's tests from its source folder with
+`python3 -m pytest test`.
