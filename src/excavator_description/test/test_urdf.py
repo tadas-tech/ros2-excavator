@@ -1,8 +1,8 @@
 """Checks on the excavator URDF produced by xacro."""
 
 import math
-import xml.etree.ElementTree as ET
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import pytest
@@ -132,7 +132,8 @@ def test_every_cylinder_has_barrel_and_rod(robot):
 
 
 def pin_distances(robot, name):
-    """Pin-to-pin distance of a cylinder over its joint's range.
+    """
+    Pin-to-pin distance of a cylinder over its joint's range.
 
     Returns (distances, barrel_length, rod_length).
     """

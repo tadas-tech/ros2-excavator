@@ -1,4 +1,5 @@
-"""Slider GUI for the excavator.
+"""
+Slider GUI for the excavator.
 
 Waits for the URDF on /robot_description, builds one slider per movable
 joint (using the joint limits from the URDF) and publishes the slider
@@ -10,17 +11,16 @@ import signal
 import sys
 import xml.etree.ElementTree as ET
 
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile
-from sensor_msgs.msg import JointState
-from std_msgs.msg import String
-
 from python_qt_binding.QtCore import Qt, QTimer
 from python_qt_binding.QtWidgets import (
     QApplication, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSlider,
     QVBoxLayout, QWidget,
 )
+import rclpy
+from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile
+from sensor_msgs.msg import JointState
+from std_msgs.msg import String
 
 SLIDER_STEPS = 1000
 PUBLISH_RATE_HZ = 30.0

@@ -3,13 +3,9 @@
 import math
 import os
 
+from excavator_gui.slider_gui import JointSlider, parse_joints, SLIDER_STEPS
 import pytest
-
-os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')  # no display needed
-
-from python_qt_binding.QtWidgets import QApplication  # noqa: E402
-
-from excavator_gui.slider_gui import SLIDER_STEPS, JointSlider, parse_joints  # noqa: E402
+from python_qt_binding.QtWidgets import QApplication
 
 URDF = """<?xml version="1.0"?>
 <robot name="test">
@@ -32,6 +28,7 @@ URDF = """<?xml version="1.0"?>
 
 @pytest.fixture(scope='module')
 def qapp():
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')  # no display needed
     return QApplication.instance() or QApplication([])
 
 
