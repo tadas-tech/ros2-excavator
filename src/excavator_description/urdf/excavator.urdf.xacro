@@ -7,7 +7,7 @@
     base_footprint (ground, root)
     └─ base_link (undercarriage)
          ├─ left_track / right_track        (fixed)
-         └─ swing_joint   → upper_structure (revolute, Z)
+         └─ swing_joint   → upper_structure (continuous, Z)
               └─ boom_joint   → boom        (revolute, pitch)
                    └─ arm_joint    → arm    (revolute, pitch)
                         └─ bucket_joint → bucket (revolute, pitch)
@@ -347,12 +347,13 @@
                         xyz="${house_offset_x} 0 ${house_size_z/2}"/>
   </link>
 
-  <joint name="swing_joint" type="revolute">
+  <!-- continuous: the upper structure can swing all the way round -->
+  <joint name="swing_joint" type="continuous">
     <parent link="base_link"/>
     <child link="upper_structure"/>
     <origin xyz="0 0 ${swing_z}" rpy="0 0 0"/>
     <axis xyz="0 0 1"/>
-    <limit lower="${-pi}" upper="${pi}" effort="50000" velocity="1.0"/>
+    <limit effort="50000" velocity="1.0"/>
   </joint>
 
   <!-- ===================== Boom ===================== -->

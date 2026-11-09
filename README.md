@@ -17,7 +17,7 @@ extend and retract with the joints.
 
 | Joint | Moves | Range (rad) |
 |---|---|---|
-| `swing_joint` | upper body on the tracks | −3.14 … 3.14 |
+| `swing_joint` | upper body on the tracks | continuous (no limit; slider covers −π … π) |
 | `boom_joint` | boom | −0.6 … 1.1 |
 | `arm_joint` | arm (stick) | −2.6 … 0.3 |
 | `bucket_joint` | bucket | −2.2 … 1.0 |
@@ -26,8 +26,14 @@ Positive angles raise the boom, arm and bucket.
 
 ## Requirements
 
-ROS 2 Lyrical with `xacro`, `robot_state_publisher`, `rviz2`, `tf2_ros`, `python_qt_binding`,
-and optionally `joint_state_publisher_gui`:
+ROS 2 Lyrical with `xacro`, `robot_state_publisher`, `rviz2`, `tf2_ros`, `python_qt_binding`
+and `joint_state_publisher_gui` (used by `gui:=jsp`). `rosdep` installs them all:
+
+```bash
+rosdep install --from-paths src --ignore-src -y
+```
+
+or with apt:
 
 ```bash
 sudo apt install ros-lyrical-xacro ros-lyrical-joint-state-publisher-gui

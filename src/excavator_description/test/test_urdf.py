@@ -10,9 +10,9 @@ import xacro
 
 XACRO_PATH = Path(__file__).resolve().parent.parent / 'urdf' / 'excavator.urdf.xacro'
 
-# The joint table in the README.
+# The joint table in the README. None = continuous (no position limits).
 EXPECTED_JOINTS = {
-    'swing_joint': (-math.pi, math.pi),
+    'swing_joint': None,
     'boom_joint': (-0.6, 1.1),
     'arm_joint': (-2.6, 0.3),
     'bucket_joint': (-2.2, 1.0),
@@ -87,13 +87,18 @@ def test_names_are_unique(robot):
 def test_movable_joints_match_readme(robot):
     movable = {}
     for joint in robot.iter('joint'):
-        if joint.get('type') in ('revolute', 'continuous', 'prismatic'):
+        if joint.get('type') == 'continuous':
+            movable[joint.get('name')] = None
+        elif joint.get('type') in ('revolute', 'prismatic'):
             limit = joint.find('limit')
             movable[joint.get('name')] = (float(limit.get('lower')), float(limit.get('upper')))
 
     assert movable.keys() == EXPECTED_JOINTS.keys()
-    for name, (lower, upper) in EXPECTED_JOINTS.items():
-        assert movable[name] == pytest.approx((lower, upper), abs=1e-3), name
+    for name, limits in EXPECTED_JOINTS.items():
+        if limits is None:
+            assert movable[name] is None, f'{name} should be continuous'
+        else:
+            assert movable[name] == pytest.approx(limits, abs=1e-3), name
 
 
 @pytest.mark.parametrize('name', ['boom_joint', 'arm_joint', 'bucket_joint'])
