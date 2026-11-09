@@ -244,6 +244,34 @@ def bucket_lowest_point(robot, q):
     return (pts @ M[:3, :3].T + M[:3, 3])[:, 2].min()
 
 
+@pytest.fixture(scope='module')
+def presets():
+    from excavator_gui.poses import PRESET_POSES
+    return PRESET_POSES
+
+
+def test_presets_within_joint_limits(robot, presets):
+    joints = {j.get('name'): j for j in robot.iter('joint')}
+    for pose_name, pose in presets.items():
+        for name, value in pose.items():
+            assert name in joints, f'{pose_name}: unknown joint {name}'
+            if joints[name].get('type') == 'continuous':
+                continue
+            limit = joints[name].find('limit')
+            assert float(limit.get('lower')) <= value <= float(limit.get('upper')), \
+                f'{pose_name}: {name}={value} outside its limits'
+
+
+@pytest.mark.parametrize('pose_name, low, high', [
+    ('Transport', 0.3, 1.0),   # carried just above the ground
+    ('Dig', -0.4, 0.0),        # teeth just into the ground
+    ('Dump', 3.0, 5.0),        # above a truck bed
+])
+def test_preset_bucket_height(robot, presets, pose_name, low, high):
+    lowest = bucket_lowest_point(robot, presets[pose_name])
+    assert low <= lowest <= high, f'{pose_name}: bucket lowest point at {lowest:.2f} m'
+
+
 def test_bucket_opens_away_from_its_pins(robot):
     """
     Backhoe bucket: the body is on the cylinder-pin side of the pivot-teeth line.
