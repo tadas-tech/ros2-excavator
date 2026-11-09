@@ -7,6 +7,7 @@
   <maintainer email="tadasrasimavicius@outlook.com">tadas</maintainer>
   <license>Apache-2.0</license>
 
+  <exec_depend>excavator_msgs</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>

@@ -11,7 +11,8 @@ extend and retract with the joints.
 |---|---|
 | `excavator_description` | xacro model, launch file, RViz config |
 | `excavator_gui` | Qt slider window; one slider per joint, read from the URDF |
-| `excavator_hydraulics` | Node that publishes TF for the cylinder barrels and rods |
+| `excavator_hydraulics` | Node that publishes TF for the cylinder barrels and rods, and their strokes |
+| `excavator_msgs` | `CylinderState` / `CylinderStates` messages |
 
 ## Joints
 
@@ -36,6 +37,23 @@ arrive together without exceeding their URDF velocity limits; dragging a slider 
 | Dig | arm reaching out ~9 m, bucket opened, teeth just into the ground |
 | Dump | swung 90° to the cab side, bucket ~3.8 m up and tipped out |
 | Reset | all joints back to 0 |
+
+The **Bucket tip** panel moves the tip of the middle tooth (the `bucket_tip` frame) instead of
+single joints. Drag a slider or type a value and press Enter:
+
+| Field | Meaning |
+|---|---|
+| reach | distance from the swing axis, along the swing direction (m) |
+| height | height above the ground (m) |
+| bucket angle | pitch of the bucket (boom + arm + bucket angle); 0° as in the Reset pose, + tips it open |
+
+Changing one field keeps the other two fixed — e.g. lowering the height moves the tip straight
+down without tilting the bucket. Boom, arm and bucket angles are solved in closed form
+(`src/excavator_gui/excavator_gui/kinematics.py`); if no joint angles within the limits put the tip
+there, the panel says "Out of reach" and nothing moves. Swing stays on its own slider.
+
+A **Cylinders** panel under the buttons shows each hydraulic cylinder's stroke (0 % fully
+retracted, 100 % fully extended), its pin-to-pin length and its speed.
 
 The poses are in `src/excavator_gui/excavator_gui/poses.py`; `test_urdf.py` checks they are within
 the joint limits and that the bucket ends up at the right height.
@@ -79,6 +97,14 @@ Each cylinder is a `<name>_barrel` link on its base link and a `<name>_rod` link
 attached by floating joints. `robot_state_publisher` and the joint GUIs ignore floating joints;
 `excavator_hydraulics` publishes their TF so barrel and rod always point at each other's pin.
 
+`excavator_hydraulics` also publishes `/cylinder_states` (`excavator_msgs/CylinderStates`, 30 Hz):
+for each cylinder its pin-to-pin `length`, the `min_length` / `max_length` over its joint's range
+(fully retracted / extended), `stroke` = length − min_length, and `velocity` (m/s, + extending).
+
+```bash
+ros2 topic echo /cylinder_states
+```
+
 Pin positions and lengths are properties at the top of `excavator.urdf.xacro`. When changing them,
 barrel and rod length must each be ≤ the shortest pin-to-pin distance over the joint range, and
 together ≥ the longest. `test_urdf.py` checks this.
@@ -93,9 +119,9 @@ colcon test-result --verbose
 
 | Package | Tests |
 |---|---|
-| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, bucket faces the backhoe way, presets are reachable and put the bucket at the right height, launch file builds |
-| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping, preset poses and smooth motion (runs headless) |
-| `excavator_hydraulics` | cylinder parsing, quaternion maths, barrel and rod point at each other's pin for a range of joint angles |
+| `excavator_description` | URDF is one tree with valid inertias, joints and limits match the table above, every cylinder fits over its joint's range, bucket faces the backhoe way, `bucket_tip` is on the teeth and the GUI's tip kinematics match the URDF, presets are reachable and put the bucket at the right height, launch file builds |
+| `excavator_gui` | URDF joint parsing, slider ↔ joint-position mapping and clamping, preset poses and smooth motion, bucket-tip forward/inverse kinematics and panel, cylinder panel (runs headless) |
+| `excavator_hydraulics` | cylinder parsing, quaternion maths, barrel and rod point at each other's pin for a range of joint angles, cylinder length range, stroke and speed |
 
 During development you can run one package's tests from its source folder with
 `python3 -m pytest test`.

@@ -192,3 +192,118 @@ def test_targets_are_clamped_and_unknown_joints_ignored(gui):
 
 def time_after(gui):
     return gui.motion_start + gui.motion.duration
+
+
+# ---------------------------------------------------------------- cylinder panel
+
+def cylinder_states(**cylinders):
+    from excavator_msgs.msg import CylinderState, CylinderStates
+    msg = CylinderStates()
+    for name, (length, lo, hi, velocity) in cylinders.items():
+        msg.cylinders.append(CylinderState(
+            name=name, length=length, min_length=lo, max_length=hi,
+            stroke=length - lo, velocity=velocity))
+    return msg
+
+
+def test_cylinder_panel_hidden_until_first_message(gui):
+    assert gui.cylinder_box.isHidden()
+    gui._on_cylinder_states(cylinder_states(arm_cyl=(3.0, 2.5, 4.5, 0.0)))
+    assert not gui.cylinder_box.isHidden()
+
+
+def test_cylinder_rows_show_stroke(gui):
+    gui._on_cylinder_states(cylinder_states(
+        arm_cyl=(3.0, 2.5, 4.5, 0.25), bucket_cyl=(2.9, 2.9, 3.7, -0.1)))
+    arm, bucket = gui.cylinder_rows['arm_cyl'], gui.cylinder_rows['bucket_cyl']
+    assert arm.bar.value() == 25
+    assert arm.value_label.text() == '3.000 m   stroke 0.500 / 2.000 m   +0.25 m/s'
+    assert bucket.bar.value() == 0
+
+    gui._on_cylinder_states(cylinder_states(arm_cyl=(4.5, 2.5, 4.5, 0.0)))
+    assert arm.bar.value() == 100
+    assert len(gui.cylinder_rows) == 2  # rows are reused, not added again
+
+
+def test_cylinder_with_unknown_range(gui):
+    nan = float('nan')
+    gui._on_cylinder_states(cylinder_states(odd_cyl=(1.5, nan, nan, 0.0)))
+    row = gui.cylinder_rows['odd_cyl']
+    assert row.bar.format() == 'range unknown'
+    assert 'stroke ?' in row.value_label.text()
+
+
+# ---------------------------------------------------------------- bucket-tip panel
+
+@pytest.fixture
+def tip_gui(qapp):
+    from test_kinematics import URDF as ARM_URDF
+    rclpy.init()
+    node = Node('test_slider_gui_tip')
+    gui = SliderGui(node)
+    gui._on_description(String(data=ARM_URDF))
+    yield gui
+    gui.stop_motion()
+    gui.deleteLater()
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+def shown_tip(gui):
+    rows = gui.tip_rows
+    return rows['reach'].value(), rows['height'].value(), rows['angle'].value()
+
+
+def test_no_tip_panel_without_bucket_tip(gui):
+    assert gui.arm is None
+    assert gui.tip_rows == {}
+
+
+def test_tip_panel_shows_the_tip(tip_gui):
+    tip_gui.sliders[1].set_position(0.4)  # boom
+    tip_gui._refresh_tip()
+    reach, height, angle = tip_gui.arm.forward(tip_gui.joint_positions())
+    assert shown_tip(tip_gui) == pytest.approx((reach, height, angle), abs=0.01)
+
+
+def test_editing_height_moves_the_tip_straight_down(tip_gui):
+    for js, value in zip(tip_gui.sliders, (0.0, 0.3, -1.4, -0.6)):
+        js.set_position(value)
+    tip_gui._refresh_tip(force=True)
+    reach, height, angle = shown_tip(tip_gui)
+
+    tip_gui.tip_rows['height'].spin.setValue(height - 0.5)  # as if typed + Enter
+
+    assert tip_gui.arm.forward(tip_gui.joint_positions()) == pytest.approx(
+        (reach, height - 0.5, angle), abs=0.01)  # display rounding: 0.01 m, 0.5 deg
+    assert tip_gui.tip_status.text() == ''
+
+
+def test_dragging_the_tip_slider_moves_the_joints(tip_gui):
+    tip_gui._refresh_tip(force=True)
+    before = tip_gui.joint_positions()
+    row = tip_gui.tip_rows['reach']
+    row.slider.setValue(row.slider.value() - 100)  # 1 m closer
+    assert tip_gui.joint_positions() != before
+    assert tip_gui.arm.forward(tip_gui.joint_positions())[0] == pytest.approx(
+        row.value(), abs=1e-6)
+
+
+def test_unreachable_tip_leaves_joints_alone(tip_gui):
+    tip_gui._refresh_tip(force=True)
+    before = tip_gui.joint_positions()
+    assert not tip_gui.move_tip(20.0, 2.0, 0.0)
+    assert tip_gui.joint_positions() == before
+    assert 'Out of reach' in tip_gui.tip_status.text()
+
+    tip_gui.tip_rows['reach'].spin.setValue(12.9)  # too far: display snaps back
+    assert tip_gui.tip_rows['reach'].value() == pytest.approx(
+        tip_gui.arm.forward(before)[0], abs=0.01)
+
+
+def test_tip_edit_stops_a_preset_motion(tip_gui):
+    tip_gui.move_to({'boom_joint': 1.0}, now=0.0)
+    tip_gui._step_motion(now=0.5)
+    reach, height, angle = tip_gui.arm.forward(tip_gui.joint_positions())
+    assert tip_gui.move_tip(reach - 0.5, height, angle)
+    assert tip_gui.motion is None

@@ -1,5 +1,5 @@
 """
-TF publisher for hydraulic cylinders.
+TF and state publisher for hydraulic cylinders.
 
 Finds every cylinder in the URDF on /robot_description: a pair of links
 <name>_barrel and <name>_rod attached by floating joints. The barrel's joint
@@ -7,11 +7,17 @@ origin is its mounting pin on the base link, the rod's joint origin is its
 pin on the tip link. Whenever the base -> tip transform changes, both links
 are re-published so the barrel's and the rod's +X axes point at each other's
 pin, which makes the cylinder extend and retract with the joints.
+
+It also publishes each cylinder's pin-to-pin length, stroke and speed on
+/cylinder_states (excavator_msgs/CylinderStates).
 """
 
 from dataclasses import dataclass
+import math
+import time
 import xml.etree.ElementTree as ET
 
+from excavator_msgs.msg import CylinderState, CylinderStates
 from geometry_msgs.msg import TransformStamped
 import numpy as np
 import rclpy
@@ -22,27 +28,81 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformBroadcaster, TransformException, TransformListener
 
 PUBLISH_RATE_HZ = 30.0
+RANGE_SAMPLES = 2001  # joint positions checked when finding a cylinder's length range
+VELOCITY_TIMEOUT = 0.2  # s without a new transform before velocity reads 0
 
 
 @dataclass
 class Cylinder:
     name: str
-    base: str            # link the barrel hangs from
+    base: str             # link the barrel hangs from
     base_pin: np.ndarray  # barrel pin in the base frame
-    tip: str             # link the rod hangs from
+    tip: str              # link the rod hangs from
     tip_pin: np.ndarray   # rod pin in the tip frame
-    last_stamp: tuple = None
+    min_length: float = math.nan  # pin-to-pin length range over the joint's limits
+    max_length: float = math.nan
+    last_stamp: tuple = None      # stamp of the last base -> tip transform used
+    length: float = math.nan
+    velocity: float = 0.0
+    last_change: float = 0.0      # monotonic time the transform last changed
+
+
+def _vec(element, attr, default='0 0 0'):
+    value = element.get(attr, default) if element is not None else default
+    return np.array([float(v) for v in value.split()])
+
+
+def rpy_to_matrix(roll, pitch, yaw):
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return np.array([
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+        [-sp, cp * sr, cp * cr],
+    ])
+
+
+def length_range(joint, base_pin, tip_pin):
+    """
+    Shortest and longest pin-to-pin length as `joint` moves over its range.
+
+    `joint` is the URDF <joint> element joining the cylinder's base link
+    (parent) to its tip link (child). Returns (nan, nan) for other joint types.
+    """
+    jtype = joint.get('type')
+    if jtype == 'continuous':
+        lower, upper = -math.pi, math.pi
+    elif jtype == 'revolute':
+        limit = joint.find('limit')
+        lower, upper = float(limit.get('lower')), float(limit.get('upper'))
+    else:
+        return math.nan, math.nan
+
+    origin = joint.find('origin')
+    offset = _vec(origin, 'xyz')
+    fixed = rpy_to_matrix(*_vec(origin, 'rpy'))
+    axis = _vec(joint.find('axis'), 'xyz', '1 0 0')
+    k = axis / np.linalg.norm(axis)
+
+    # Rodrigues rotation of tip_pin about k, for every sampled angle at once.
+    angles = np.linspace(lower, upper, RANGE_SAMPLES)[:, None]
+    rotated = (tip_pin * np.cos(angles) + np.cross(k, tip_pin) * np.sin(angles)
+               + np.outer(1 - np.cos(angles), k * (k @ tip_pin)))
+    lengths = np.linalg.norm(offset + rotated @ fixed.T - base_pin, axis=1)
+    return float(lengths.min()), float(lengths.max())
 
 
 def parse_cylinders(urdf_xml):
+    joints = list(ET.fromstring(urdf_xml).iter('joint'))
+    by_child = {j.find('child').get('link'): j for j in joints}
+
     floating = {}
-    for joint in ET.fromstring(urdf_xml).iter('joint'):
+    for joint in joints:
         if joint.get('type') != 'floating':
             continue
-        origin = joint.find('origin')
-        xyz = origin.get('xyz', '0 0 0') if origin is not None else '0 0 0'
         floating[joint.find('child').get('link')] = (
-            joint.find('parent').get('link'), np.array([float(v) for v in xyz.split()]))
+            joint.find('parent').get('link'), _vec(joint.find('origin'), 'xyz'))
 
     cylinders = []
     for child, (parent, pin) in floating.items():
@@ -52,7 +112,11 @@ def parse_cylinders(urdf_xml):
         if name + '_rod' not in floating:
             continue
         tip, tip_pin = floating[name + '_rod']
-        cylinders.append(Cylinder(name, parent, pin, tip, tip_pin))
+        cyl = Cylinder(name, parent, pin, tip, tip_pin)
+        joint = by_child.get(tip)
+        if joint is not None and joint.find('parent').get('link') == parent:
+            cyl.min_length, cyl.max_length = length_range(joint, pin, tip_pin)
+        cylinders.append(cyl)
     return cylinders
 
 
@@ -86,16 +150,22 @@ class CylinderTf(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.tf_broadcaster = TransformBroadcaster(self)
 
-        qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
-        self.create_subscription(String, 'robot_description', self._on_description, qos)
+        latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
+        self.create_subscription(String, 'robot_description', self._on_description, latched)
+        self.state_pub = self.create_publisher(CylinderStates, 'cylinder_states', latched)
         self.create_timer(1.0 / PUBLISH_RATE_HZ, self._publish)
 
     def _on_description(self, msg):
         self.cylinders = parse_cylinders(msg.data)
-        self.get_logger().info(
-            'Cylinders: ' + (', '.join(c.name for c in self.cylinders) or 'none'))
+        for c in self.cylinders:
+            self.get_logger().info(
+                f'Cylinder {c.name}: {c.base} -> {c.tip}, '
+                f'length {c.min_length:.3f} .. {c.max_length:.3f} m')
+        if not self.cylinders:
+            self.get_logger().info('Cylinders: none')
 
-    def _publish(self):
+    def _publish(self, now=None):
+        now = time.monotonic() if now is None else now
         transforms = []
         for cyl in self.cylinders:
             try:
@@ -104,8 +174,11 @@ class CylinderTf(Node):
                 continue
             stamp = (t.header.stamp.sec, t.header.stamp.nanosec)
             if stamp == cyl.last_stamp:
-                continue  # joints unchanged; re-sending would be repeated TF data
-            cyl.last_stamp = stamp
+                # No new joint state. Keep the speed through short gaps between
+                # updates, but report 0 once the joints have stopped publishing.
+                if now - cyl.last_change > VELOCITY_TIMEOUT:
+                    cyl.velocity = 0.0
+                continue  # re-sending would be repeated TF data
 
             # base_T_tip
             r = t.transform.rotation
@@ -115,6 +188,14 @@ class CylinderTf(Node):
             tip_pin_in_base = R @ cyl.tip_pin + p
             base_pin_in_tip = R.T @ (cyl.base_pin - p)
 
+            length = float(np.linalg.norm(tip_pin_in_base - cyl.base_pin))
+            if cyl.last_stamp is not None:
+                dt = (stamp[0] - cyl.last_stamp[0]) + (stamp[1] - cyl.last_stamp[1]) * 1e-9
+                cyl.velocity = (length - cyl.length) / dt if dt > 0 else 0.0
+            cyl.length = length
+            cyl.last_stamp = stamp
+            cyl.last_change = now
+
             transforms.append(self._make_tf(
                 t.header.stamp, cyl.base, cyl.name + '_barrel',
                 cyl.base_pin, tip_pin_in_base - cyl.base_pin))
@@ -123,6 +204,20 @@ class CylinderTf(Node):
                 cyl.tip_pin, base_pin_in_tip - cyl.tip_pin))
         if transforms:
             self.tf_broadcaster.sendTransform(transforms)
+        self._publish_states()
+
+    def _publish_states(self):
+        known = [c for c in self.cylinders if c.last_stamp is not None]
+        if not known:
+            return
+        msg = CylinderStates()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        for c in known:
+            msg.cylinders.append(CylinderState(
+                name=c.name, length=c.length, min_length=c.min_length,
+                max_length=c.max_length, stroke=c.length - c.min_length,
+                velocity=c.velocity))
+        self.state_pub.publish(msg)
 
     @staticmethod
     def _make_tf(stamp, parent, child, origin, direction):

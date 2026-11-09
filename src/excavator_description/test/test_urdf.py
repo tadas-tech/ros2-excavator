@@ -289,3 +289,31 @@ def test_bucket_opens_away_from_its_pins(robot):
         return np.sign(teeth[0] * p[1] - teeth[1] * p[0])
 
     assert side(pts.mean(axis=0)) == side(pin)
+
+
+# ---------------------------------------------------------------- bucket-tip kinematics
+
+def test_bucket_tip_frame_is_on_the_teeth(robot):
+    joint = next(j for j in robot.iter('joint') if j.get('name') == 'bucket_tip_joint')
+    assert joint.get('type') == 'fixed'
+    assert joint.find('parent').get('link') == 'bucket'
+    bucket = next(link for link in robot.iter('link') if link.get('name') == 'bucket')
+    tip = vec(joint.find('origin'), 'xyz')
+    lowest = visual_points(bucket)[:, 2].min()  # tips of the teeth point along -Z
+    assert tip[2] == pytest.approx(lowest, abs=0.01)
+
+
+def test_tip_kinematics_match_the_urdf(robot):
+    """excavator_gui's planar model gives the same tip as the full URDF transforms."""
+    from excavator_gui.kinematics import PlanarArm
+    arm = PlanarArm.from_urdf(xacro.process_file(str(XACRO_PATH)).toxml())
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        q = {j.name: rng.uniform(j.lower, j.upper) for j in arm.joints}
+        swing = rng.uniform(-math.pi, math.pi)
+        M = link_transform(robot, 'bucket_tip', {**q, 'swing_joint': swing})
+        reach = M[0, 3] * math.cos(swing) + M[1, 3] * math.sin(swing)
+        expected = (reach, M[2, 3])
+        assert arm.forward(q)[:2] == pytest.approx(expected, abs=1e-9)
+        solution = arm.inverse(*arm.forward(q), current=q)
+        assert solution == pytest.approx(q, abs=1e-9)
